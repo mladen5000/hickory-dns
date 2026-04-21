@@ -138,6 +138,7 @@ impl From<NetError> for RecursorError {
                 no_records.soa,
                 true,
                 matches!(no_records.response_code, ResponseCode::NXDomain),
+                None,
                 no_records.authorities,
             ))
         }
@@ -202,6 +203,8 @@ pub struct AuthorityData {
     no_records_found: bool,
     /// IS nx domain?
     nx_domain: bool,
+    /// Answer records
+    pub answers: Option<Arc<[Record]>>,
     /// Authority records
     pub authorities: Option<Arc<[Record]>>,
 }
@@ -213,6 +216,7 @@ impl AuthorityData {
         soa: Option<Box<Record<SOA>>>,
         no_records_found: bool,
         nx_domain: bool,
+        answers: Option<Arc<[Record]>>,
         authorities: Option<Arc<[Record]>>,
     ) -> Self {
         Self {
@@ -220,6 +224,7 @@ impl AuthorityData {
             soa,
             no_records_found,
             nx_domain,
+            answers,
             authorities,
         }
     }
