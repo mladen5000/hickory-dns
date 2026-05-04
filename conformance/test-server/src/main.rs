@@ -45,6 +45,9 @@ async fn main() -> Result<()> {
             name,
             record_type,
         )),
+        HandlerArg::Rfc6840Section4_3 { ip_address } => {
+            Arc::new(handlers::Rfc6840Section4_3Handler::new(ip_address))
+        }
     };
 
     let mut handles = vec![];
@@ -101,6 +104,9 @@ enum HandlerArg {
         ip_address: IpAddr,
         name: Name,
         record_type: RecordType,
+    },
+    Rfc6840Section4_3 {
+        ip_address: IpAddr,
     },
 }
 
