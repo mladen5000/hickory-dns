@@ -1058,6 +1058,17 @@ async fn build_forwarded_response(
 
             (answers, None, authorities, additionals)
         }
+        Ok(AuthLookup::Response(message)) => {
+            // Extract each section from the Message to preserve section structure
+            let answers =
+                AuthLookup::answers(LookupRecords::Section(message.answers.clone()), None);
+            let authorities =
+                AuthLookup::answers(LookupRecords::Section(message.authorities.clone()), None);
+            let additionals =
+                AuthLookup::answers(LookupRecords::Section(message.additionals.clone()), None);
+
+            (answers, None, authorities, additionals)
+        }
         Ok(l) => (l, None, AuthLookup::default(), AuthLookup::default()),
         Err(e) if e.is_no_records_found() || e.is_nx_domain() => {
             debug!(error = ?e, "error resolving");
