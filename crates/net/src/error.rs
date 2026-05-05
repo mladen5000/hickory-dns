@@ -308,6 +308,12 @@ impl DnsError {
                         None
                     };
 
+                    let answers = if !response.answers.is_empty() {
+                        Some(response.answers.to_owned().into())
+                    } else {
+                        None
+                    };
+
                     let authorities = if !response.authorities.is_empty() {
                         Some(response.authorities.to_owned().into())
                     } else {
@@ -323,6 +329,7 @@ impl DnsError {
                         ns: option_ns,
                         negative_ttl,
                         response_code: code,
+                        answers,
                         authorities,
                     }))
                 }
@@ -350,6 +357,8 @@ pub struct NoRecords {
     /// ResponseCode, if `NXDOMAIN`, the domain does not exist (and no other types).
     ///   If `NoError`, then the domain exists but there exist either other types at the same label, or subzones of that label.
     pub response_code: ResponseCode,
+    /// Answer section records from the response. These may be necessary for a CNAME chain.
+    pub answers: Option<Arc<[Record]>>,
     /// Authority records from the query. These are important to preserve for DNSSEC validation.
     pub authorities: Option<Arc<[Record]>>,
 }
@@ -363,6 +372,7 @@ impl NoRecords {
             ns: None,
             negative_ttl: None,
             response_code,
+            answers: None,
             authorities: None,
         }
     }
