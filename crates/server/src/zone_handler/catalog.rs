@@ -1066,6 +1066,15 @@ async fn build_forwarded_response(
                 response_meta.response_code = ResponseCode::NXDomain;
             }
 
+            let answers = if let Some(answers) = e.answers() {
+                AuthLookup::answers(
+                    LookupRecords::Section(answers.iter().cloned().collect()),
+                    None,
+                )
+            } else {
+                AuthLookup::default()
+            };
+
             // Collect all of the authority records, except the SOA
             let authorities = if let Some(authorities) = e.authorities() {
                 let authorities = authorities
@@ -1098,19 +1107,9 @@ async fn build_forwarded_response(
             if let Some(soa) = e.into_soa() {
                 let soa = soa.into_record_of_rdata();
 
-                (
-                    AuthLookup::default(),
-                    Some(soa),
-                    authorities,
-                    AuthLookup::default(),
-                )
+                (answers, Some(soa), authorities, AuthLookup::default())
             } else {
-                (
-                    AuthLookup::default(),
-                    None,
-                    authorities,
-                    AuthLookup::default(),
-                )
+                (answers, None, authorities, AuthLookup::default())
             }
         }
         #[cfg(all(feature = "__dnssec", feature = "recursor"))]
