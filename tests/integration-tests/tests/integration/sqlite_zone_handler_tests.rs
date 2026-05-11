@@ -1252,7 +1252,6 @@ async fn test_journal() {
         handler.origin().clone().into(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
         Some(NxProofKind::Nsec),
     );
 
@@ -1310,7 +1309,6 @@ async fn test_recovery() {
         handler.origin().clone().into(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
         Some(NxProofKind::Nsec),
     );
 

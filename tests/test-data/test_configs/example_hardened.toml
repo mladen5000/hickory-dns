@@ -1,0 +1,174 @@
+## Hardened recursor configuration.
+##
+## Combines, in one file, the strongest available defenses against the threats
+## a recursive DNS server typically faces:
+##
+##   * Surveillance on the wire to upstreams — opportunistic DoT/DoQ (RFC 9539).
+##   * Spoofing / on-path tampering — DNSSEC validation with NSEC3 limits.
+##   * DNS rebinding / data exfil into RFC1918 — deny_answers on private ranges.
+##   * SSRF-via-recursor against internal hosts — deny_server overrides.
+##   * Resource exhaustion DoS — bounded caches and recursion limits.
+##   * Zone-walk / AXFR exfil — axfr_policy defaults to deny on every zone.
+##   * TLS-key exfil — ssl_keylog_enabled left unset (default false).
+##
+## Required build features: recursor, dnssec-aws-lc-rs (or dnssec-ring),
+## quic-aws-lc-rs (or quic-ring) for DoQ, tls-aws-lc-rs (or tls-ring) for DoT.
+
+## Bind on loopback only by default; replace with your service address(es).
+## Leaving these empty would bind on all interfaces.
+listen_addrs_ipv4 = ["127.0.0.1"]
+listen_addrs_ipv6 = ["::1"]
+listen_port = 53
+
+## Reject slow / Slowloris-style TCP clients quickly.
+tcp_request_timeout = 5
+
+## SSLKEYLOGFILE support stays OFF. Enabling it lets anything with write access
+## to the configured path decrypt captured DoT/DoH/DoQ sessions.
+# ssl_keylog_enabled = false
+
+## Client ACL. Replace with the prefixes you actually serve; an open recursor
+## is an amplification weapon. Empty allow_networks = open to the world.
+allow_networks = ["127.0.0.0/8", "::1/128"]
+deny_networks  = []
+
+## Drop privileges if started as root.
+user  = "nobody"
+group = "nobody"
+
+## ---------------------------------------------------------------------------
+## Default zones — every recursor should answer these locally rather than
+## leaking the queries upstream.
+## ---------------------------------------------------------------------------
+
+[[zones]]
+zone = "localhost"
+zone_type = "Primary"
+file = "default/localhost.zone"
+
+[[zones]]
+zone = "0.0.127.in-addr.arpa"
+zone_type = "Primary"
+file = "default/127.0.0.1.zone"
+
+[[zones]]
+zone = "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa"
+zone_type = "Primary"
+file = "default/ipv6_1.zone"
+
+[[zones]]
+zone = "255.in-addr.arpa"
+zone_type = "Primary"
+file = "default/255.zone"
+
+[[zones]]
+zone = "0.in-addr.arpa"
+zone_type = "Primary"
+file = "default/0.zone"
+
+## ---------------------------------------------------------------------------
+## Recursive resolver for the root zone.
+## ---------------------------------------------------------------------------
+
+[[zones]]
+zone = "."
+zone_type = "External"
+
+[zones.stores]
+type = "recursor"
+roots = "default/root.zone"
+
+## Bounded caches limit memory exposure under sustained query floods.
+ns_cache_size = 1024
+response_cache_size = 1048576
+
+## Bounded recursion depth — without these, a hostile zone delegation chain
+## can force unbounded work per query.
+recursion_limit = 24
+ns_recursion_limit = 24
+
+## EDNS payload size kept at the conservative DNS Flag Day 2020 value to
+## minimise IP-fragmentation-based cache poisoning risk.
+edns_payload_len = 1232
+
+## Anti-rebinding / anti-exfil: drop upstream answers that resolve to private,
+## loopback, link-local, or documentation ranges. These are the classic
+## prefixes an external attacker uses to pivot CSRF / SSRF / data-exfil
+## traffic through a victim's resolver back into the victim's intranet.
+allow_answers = []
+deny_answers = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "0.0.0.0/8",
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "240.0.0.0/4",
+    "255.255.255.255/32",
+    "::/128",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/64",
+    "ff00::/8",
+    "2001:db8::/32",
+    "100::/64",
+]
+
+## Block the recursor from sending queries *to* internal infrastructure when
+## following NS records — stops a hostile zone from using your resolver as
+## a port-scanner against your own network.
+allow_server = []
+deny_server = [
+    "0.0.0.0/8",
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "240.0.0.0/4",
+    "255.255.255.255/32",
+    "::/128",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/64",
+    "ff00::/8",
+    "2001:db8::/32",
+]
+
+## TTL caps. Bounding positive TTLs limits how long a single bad answer
+## persists if anything slips past DNSSEC validation.
+[zones.stores.cache_policy.default]
+positive_max_ttl = 86400
+
+[zones.stores.cache_policy.A]
+positive_max_ttl = 3600
+
+[zones.stores.cache_policy.AAAA]
+positive_max_ttl = 3600
+
+## DNSSEC validation. Without this, every other defense here can be bypassed
+## by an on-path attacker forging upstream replies.
+[zones.stores.dnssec_policy.ValidateWithStaticKey]
+# trust_anchor = "/var/named/root.key"   # uncomment to override built-in root KSK
+nsec3_soft_iteration_limit = 100
+nsec3_hard_iteration_limit = 500
+validation_cache_size = 1048576
+
+## Opportunistic encryption to authoritatives (RFC 9539). The recursor probes
+## upstreams for DoT/DoQ support and, once detected, stops sending plaintext
+## queries to those servers. This is the strongest available defense against
+## passive on-path surveillance of recursor→authoritative traffic.
+[zones.stores.opportunistic_encryption.enabled]
+persistence_period = 259200
+damping_period = 86400
+max_concurrent_probes = 10
+persistence = { path = "opp_enc_state.toml", save_interval = 600 }

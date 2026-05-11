@@ -9,12 +9,18 @@ use hickory_server::zone_handler::{AxfrPolicy, ZoneType};
 
 pub fn create_example() -> InMemoryZoneHandler {
     let origin = Name::parse("example.com.", None).unwrap();
+    // `InMemoryZoneHandler::empty` now takes `Option<NxProofKind>`
+    // unconditionally (see hickory_server::dnssec); the stub is uninhabited
+    // when the `__dnssec` feature is off, so only `None` is constructible.
+    #[cfg(feature = "__dnssec")]
+    let nx_proof = Some(NxProofKind::Nsec);
+    #[cfg(not(feature = "__dnssec"))]
+    let nx_proof = None;
     let mut records = InMemoryZoneHandler::empty(
         origin.clone(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
-        Some(NxProofKind::Nsec),
+        nx_proof,
     );
 
     // example.com.		3600	IN	SOA	sns.dns.icann.org. noc.dns.icann.org. 2015082403 7200 3600 1209600 3600

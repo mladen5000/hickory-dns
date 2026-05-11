@@ -26,8 +26,7 @@ use tokio::time::sleep;
     feature = "__quic",
     all(unix, feature = "systemd"),
 ))]
-use tracing::warn;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use hickory_server::proto::ProtoError;
 use hickory_server::proto::rr::rdata::opt::NSIDPayload;
@@ -324,7 +323,7 @@ impl DnsServer {
             #[cfg(feature = "metrics")]
             config_metrics.increment_zone_metrics(&zone);
 
-            match zone.load(&zone_dir).await {
+            match zone.load_with_mode(&zone_dir, validate).await {
                 Ok(handlers) => catalog.upsert(zone_name.into(), handlers),
                 Err(err) => return Err(format!("could not load zone {zone_name}: {err}")),
             }
@@ -385,8 +384,26 @@ impl DnsServer {
 
         #[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
         if setup.cert_resolver.is_none() {
-            info!("TLS certificates are not provided");
-            info!("TLS related protocols (TLS, HTTPS and QUIC) are disabled")
+            match missing_tls_cert_verdict(
+                #[cfg(feature = "__tls")]
+                disable_tls,
+                #[cfg(feature = "__https")]
+                disable_https,
+                #[cfg(feature = "__quic")]
+                disable_quic,
+            ) {
+                MissingTlsCertVerdict::ListenerSilentlySkipped => {
+                    warn!(
+                        "TLS-family transports (DoT/DoH/DoQ) are compiled in and not all disabled, \
+                         but no [tls_cert] is configured — those listeners will NOT start. \
+                         Either set [tls_cert] or set disable_tls/disable_https/disable_quic = true \
+                         to silence this warning."
+                    );
+                }
+                MissingTlsCertVerdict::AllTlsDisabledByConfig => {
+                    info!("TLS related protocols (TLS, HTTPS and QUIC) are disabled");
+                }
+            }
         }
 
         #[cfg(feature = "__tls")]
@@ -586,8 +603,7 @@ impl ServerSetup<'_> {
             let mut tls_config = default_tls_server_config(b"dot", cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
-                warn!("DoT SSL_KEYLOG_FILE support enabled");
-                tls_config.key_log = Arc::new(KeyLogFile::new());
+                tls_config.key_log = keylog_for("DoT");
             }
 
             self.server
@@ -628,8 +644,7 @@ impl ServerSetup<'_> {
             let mut tls_config = default_tls_server_config(b"h2", cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
-                warn!("DoH SSL_KEYLOG_FILE support enabled");
-                tls_config.key_log = Arc::new(KeyLogFile::new());
+                tls_config.key_log = keylog_for("DoH");
             }
 
             self.server
@@ -668,8 +683,7 @@ impl ServerSetup<'_> {
             let mut tls_config = default_tls_server_config(b"doq", cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
-                warn!("DoQ SSL_KEYLOG_FILE support enabled");
-                tls_config.key_log = Arc::new(KeyLogFile::new());
+                tls_config.key_log = keylog_for("DoQ");
             }
 
             self.server
@@ -682,6 +696,75 @@ impl ServerSetup<'_> {
         }
         Ok(())
     }
+}
+
+/// Verdict returned by [`missing_tls_cert_verdict`] when no `[tls_cert]` is
+/// configured but the binary supports TLS-family transports.
+#[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
+#[derive(Debug, PartialEq, Eq)]
+enum MissingTlsCertVerdict {
+    /// At least one TLS-family transport is still enabled in config; the
+    /// listener will silently not start. Operator should see a warning.
+    ListenerSilentlySkipped,
+    /// Every TLS-family transport is disabled in config. Skipping the
+    /// listener is exactly what the operator asked for; an info log suffices.
+    AllTlsDisabledByConfig,
+}
+
+/// Decide whether to warn about a missing `[tls_cert]` block.
+///
+/// Pure function over the only inputs that matter so it can be unit-tested
+/// without binding ports or starting the server.
+#[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
+fn missing_tls_cert_verdict(
+    #[cfg(feature = "__tls")] disable_tls: bool,
+    #[cfg(feature = "__https")] disable_https: bool,
+    #[cfg(feature = "__quic")] disable_quic: bool,
+) -> MissingTlsCertVerdict {
+    let mut any_tls_enabled = false;
+    #[cfg(feature = "__tls")]
+    {
+        any_tls_enabled |= !disable_tls;
+    }
+    #[cfg(feature = "__https")]
+    {
+        any_tls_enabled |= !disable_https;
+    }
+    #[cfg(feature = "__quic")]
+    {
+        any_tls_enabled |= !disable_quic;
+    }
+    if any_tls_enabled {
+        MissingTlsCertVerdict::ListenerSilentlySkipped
+    } else {
+        MissingTlsCertVerdict::AllTlsDisabledByConfig
+    }
+}
+
+/// Construct a `KeyLogFile` while logging exactly which path will receive
+/// the TLS session keys. `KeyLogFile::new()` reads `SSLKEYLOGFILE` lazily
+/// at construction time; the operator who enabled `ssl_keylog_enabled` in
+/// the config should see in the log where keys are being written, including
+/// the "no SSLKEYLOGFILE set, key logging silently disabled" case (an easy
+/// way to think key-logging is on when it isn't).
+#[cfg(feature = "__tls")]
+fn keylog_for(transport: &str) -> Arc<KeyLogFile> {
+    match std::env::var_os("SSLKEYLOGFILE") {
+        Some(path) => {
+            warn!(
+                "{transport} TLS session key logging is ENABLED, keys will be written to {:?} \
+                 — anything with read access to that file can decrypt captured {transport} traffic",
+                path
+            );
+        }
+        None => {
+            warn!(
+                "{transport} ssl_keylog_enabled is set but SSLKEYLOGFILE env var is unset; \
+                 no keys will be written"
+            );
+        }
+    }
+    Arc::new(KeyLogFile::new())
 }
 
 fn banner() {
@@ -751,13 +834,30 @@ fn build_udp_socket(
         sock.set_send_buffer_size(size)?;
     }
     if socket_config.recv_buffer_size.is_some() || socket_config.send_buffer_size.is_some() {
+        let actual_recv = sock.recv_buffer_size().unwrap_or(0);
+        let actual_send = sock.send_buffer_size().unwrap_or(0);
         info!(
-            "UDP socket buffer sizes: recv={} send={} (requested recv={:?} send={:?})",
-            sock.recv_buffer_size().unwrap_or(0),
-            sock.send_buffer_size().unwrap_or(0),
-            socket_config.recv_buffer_size,
-            socket_config.send_buffer_size,
+            "UDP socket buffer sizes: recv={actual_recv} send={actual_send} \
+             (requested recv={:?} send={:?})",
+            socket_config.recv_buffer_size, socket_config.send_buffer_size,
         );
+        if let Some(req) = socket_config.recv_buffer_size {
+            if actual_recv < req {
+                warn!(
+                    "kernel capped UDP recv buffer at {actual_recv}, below the requested {req}; \
+                     increase net.core.rmem_max (Linux) or kern.ipc.maxsockbuf (BSD/macOS) \
+                     to absorb traffic bursts as configured"
+                );
+            }
+        }
+        if let Some(req) = socket_config.send_buffer_size {
+            if actual_send < req {
+                warn!(
+                    "kernel capped UDP send buffer at {actual_send}, below the requested {req}; \
+                     increase net.core.wmem_max (Linux) or kern.ipc.maxsockbuf (BSD/macOS)"
+                );
+            }
+        }
     }
 
     let s_addr = SocketAddr::new(ip, port);
@@ -891,5 +991,47 @@ mod tests {
         let too_large = "x".repeat(u16::MAX as usize + 1);
         let err = parse_nsid_payload(&too_large).unwrap_err();
         assert_eq!(err.to_string(), "NSID EDNS payload too large");
+    }
+
+    #[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
+    use super::{MissingTlsCertVerdict, missing_tls_cert_verdict};
+
+    /// When at least one TLS-family transport is enabled in config (any
+    /// `disable_*` is false), the verdict must be a warning.
+    #[cfg(all(feature = "__tls", feature = "__https", feature = "__quic"))]
+    #[test]
+    fn missing_cert_with_dot_enabled_warns() {
+        assert_eq!(
+            missing_tls_cert_verdict(false, true, true),
+            MissingTlsCertVerdict::ListenerSilentlySkipped,
+        );
+    }
+
+    #[cfg(all(feature = "__tls", feature = "__https", feature = "__quic"))]
+    #[test]
+    fn missing_cert_with_doh_enabled_warns() {
+        assert_eq!(
+            missing_tls_cert_verdict(true, false, true),
+            MissingTlsCertVerdict::ListenerSilentlySkipped,
+        );
+    }
+
+    #[cfg(all(feature = "__tls", feature = "__https", feature = "__quic"))]
+    #[test]
+    fn missing_cert_with_doq_enabled_warns() {
+        assert_eq!(
+            missing_tls_cert_verdict(true, true, false),
+            MissingTlsCertVerdict::ListenerSilentlySkipped,
+        );
+    }
+
+    /// All disable_* set → operator opted out of TLS, no warning needed.
+    #[cfg(all(feature = "__tls", feature = "__https", feature = "__quic"))]
+    #[test]
+    fn missing_cert_all_disabled_is_quiet() {
+        assert_eq!(
+            missing_tls_cert_verdict(true, true, true),
+            MissingTlsCertVerdict::AllTlsDisabledByConfig,
+        );
     }
 }

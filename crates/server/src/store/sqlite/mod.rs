@@ -125,8 +125,8 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
         let zone_name = origin;
 
         // to be compatible with previous versions, the extension might be zone, not jrnl
-        let zone_path = rooted(&config.zone_path, root_dir);
-        let journal_path = rooted(&config.journal_path, root_dir);
+        let zone_path = rooted(&config.zone_path, root_dir)?;
+        let journal_path = rooted(&config.journal_path, root_dir)?;
 
         #[cfg_attr(not(feature = "__dnssec"), allow(unused_mut))]
         let mut handler = if journal_path.exists() {
@@ -141,6 +141,8 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                 AxfrPolicy::AllowAll, // We apply our own AXFR policy before invoking the InMemoryZoneHandler.
                 #[cfg(feature = "__dnssec")]
                 nx_proof_kind,
+                #[cfg(not(feature = "__dnssec"))]
+                None,
             );
             let mut handler = Self::new(in_memory, axfr_policy, config.allow_update, enable_dnssec);
 
@@ -167,6 +169,8 @@ impl<P: RuntimeProvider + Send + Sync> SqliteZoneHandler<P> {
                 AxfrPolicy::AllowAll, // We apply our own AXFR policy before invoking the InMemoryZoneHandler.
                 #[cfg(feature = "__dnssec")]
                 nx_proof_kind,
+                #[cfg(not(feature = "__dnssec"))]
+                None,
             )?;
 
             let mut handler = Self::new(in_memory, axfr_policy, config.allow_update, enable_dnssec);
@@ -1230,7 +1234,7 @@ pub struct TsigKeyConfig {
 #[cfg(feature = "__dnssec")]
 impl TsigKeyConfig {
     fn to_signer(&self, zone_name: &Name, root_dir: Option<&Path>) -> Result<TSigner, String> {
-        let key_file = rooted(&self.key_file, root_dir);
+        let key_file = rooted(&self.key_file, root_dir)?;
         let key_data = fs::read(&key_file)
             .map_err(|e| format!("error reading TSIG key file: {}: {e}", key_file.display()))?;
         let signer_name = Name::from_str(&self.name).unwrap_or_else(|_| zone_name.clone());
@@ -1286,7 +1290,6 @@ mod tests {
             zone_from_path(&zone_path, origin.clone()).unwrap(),
             ZoneType::Primary,
             AxfrPolicy::AllowAll,
-            #[cfg(feature = "__dnssec")]
             None,
         )
         .unwrap();
@@ -1337,7 +1340,6 @@ mod tests {
                 origin.clone(),
                 ZoneType::Primary,
                 AxfrPolicy::AllowAll,
-                #[cfg(feature = "__dnssec")]
                 None,
             );
         let mut recovered =

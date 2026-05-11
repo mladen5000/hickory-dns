@@ -9,7 +9,7 @@ use toml::map::Keys;
 use toml::value::Array;
 use toml::{Table, Value};
 
-use super::{Config, ServerZoneConfig};
+use super::{Config, ConfigError, ServerZoneConfig};
 #[cfg(feature = "resolver")]
 use super::{FileConfig, ServerStoreConfig, ZoneTypeConfig};
 use hickory_server::zone_handler::ZoneType;
@@ -410,10 +410,21 @@ fn test_reject_unknown_fields() {
             skip = true;
         }
 
-        if file_name.starts_with("example_recursor_opportunistic_enc") {
-            // The opportunistic encryption enum doesn't work with this test. There's no
-            // serde equivalent to deny_unknown_fields that works for enums - it's specific
-            // to structs.
+        // The opportunistic encryption enum doesn't work with this test. There's no
+        // serde equivalent to deny_unknown_fields that works for enums - it's specific
+        // to structs.
+        let has_opp_enc = config_table
+            .get("zones")
+            .and_then(|z| z.as_array())
+            .map(|zs| {
+                zs.iter().any(|z| {
+                    z.get("stores")
+                        .and_then(|s| s.as_table())
+                        .is_some_and(|t| t.contains_key("opportunistic_encryption"))
+                })
+            })
+            .unwrap_or(false);
+        if has_opp_enc {
             println!("skipping due to opportunistic_encryption setting");
             skip = true;
         }
@@ -527,6 +538,173 @@ fn example_recursor_opportunistic_enc_config() {
 
 #[cfg(feature = "resolver")]
 #[test]
+fn open_recursor_rejected_when_listening_publicly() {
+    // Empty listen_addrs defaults to binding 0.0.0.0 and ::, so a forward
+    // store with no allow_networks is an open recursor.
+    let config = Config::from_toml(
+        r#"
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "forward"
+            [[zones.stores.name_servers]]
+            ip = "8.8.8.8"
+            trust_negative_responses = false
+            connections = [{ protocol = { type = "udp" } }]
+        "#,
+    )
+    .unwrap();
+    assert!(matches!(
+        config.check_open_recursor(),
+        Err(ConfigError::OpenRecursor)
+    ));
+}
+
+#[cfg(feature = "resolver")]
+#[test]
+fn loopback_only_forwarder_is_allowed() {
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["127.0.0.1"]
+            listen_addrs_ipv6 = ["::1"]
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "forward"
+            [[zones.stores.name_servers]]
+            ip = "8.8.8.8"
+            trust_negative_responses = false
+            connections = [{ protocol = { type = "udp" } }]
+        "#,
+    )
+    .unwrap();
+    config.check_open_recursor().unwrap();
+}
+
+#[cfg(feature = "resolver")]
+#[test]
+fn public_listen_with_acl_is_allowed() {
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["0.0.0.0"]
+            allow_networks = ["10.0.0.0/8"]
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "forward"
+            [[zones.stores.name_servers]]
+            ip = "8.8.8.8"
+            trust_negative_responses = false
+            connections = [{ protocol = { type = "udp" } }]
+        "#,
+    )
+    .unwrap();
+    config.check_open_recursor().unwrap();
+}
+
+#[cfg(feature = "recursor")]
+#[test]
+fn recursor_cache_size_too_large_is_rejected() {
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["127.0.0.1"]
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "recursor"
+            roots = "default/root.zone"
+            response_cache_size = 1099511627776
+        "#,
+    )
+    .unwrap();
+    assert!(matches!(
+        config.check_cache_caps(),
+        Err(ConfigError::CacheSizeTooLarge { field: "response_cache_size", .. })
+    ));
+}
+
+#[cfg(feature = "resolver")]
+#[test]
+fn forwarder_cache_size_too_large_is_rejected() {
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["127.0.0.1"]
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "forward"
+            options = { cache_size = 1099511627776 }
+            [[zones.stores.name_servers]]
+            ip = "8.8.8.8"
+            trust_negative_responses = false
+            connections = [{ protocol = { type = "udp" } }]
+        "#,
+    )
+    .unwrap();
+    assert!(matches!(
+        config.check_cache_caps(),
+        Err(ConfigError::CacheSizeTooLarge { field: "forward.cache_size", .. })
+    ));
+}
+
+#[cfg(feature = "recursor")]
+#[test]
+fn recursor_cache_size_at_max_is_allowed() {
+    // 1 << 24 exactly == the cap, which is allowed.
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["127.0.0.1"]
+            [[zones]]
+            zone = "."
+            zone_type = "External"
+            [zones.stores]
+            type = "recursor"
+            roots = "default/root.zone"
+            response_cache_size = 16777216
+        "#,
+    )
+    .unwrap();
+    config.check_cache_caps().unwrap();
+}
+
+#[test]
+fn directory_with_parent_dir_components_is_rejected() {
+    let config = Config::from_toml(r#"directory = "/var/named/../etc""#).unwrap();
+    assert!(matches!(
+        config.check_directory_traversal(),
+        Err(ConfigError::DirectoryTraversal { .. })
+    ));
+}
+
+#[test]
+fn absolute_directory_without_parent_dir_is_allowed() {
+    let config = Config::from_toml(r#"directory = "/var/named""#).unwrap();
+    config.check_directory_traversal().unwrap();
+}
+
+#[test]
+fn authoritative_only_does_not_trigger_open_recursor() {
+    // Authoritative servers are expected to be publicly reachable.
+    let config = Config::from_toml(
+        r#"
+            listen_addrs_ipv4 = ["0.0.0.0"]
+            [[zones]]
+            zone = "example.com"
+            zone_type = "Primary"
+            file = "example.com.zone"
+        "#,
+    )
+    .unwrap();
+    config.check_open_recursor().unwrap();
+}
+
+#[cfg(feature = "resolver")]
+#[test]
 fn single_store_config_error_message() {
     match toml::from_str::<Config>(
         r#"[[zones]]
@@ -599,4 +777,46 @@ fn file_store_zone_path() {
         }
         Err(e) => panic!("expected successful parse: {e:?}"),
     }
+}
+
+/// Walk every example config under `tests/test-data/test_configs/` that has a
+/// `[tls_cert]` block and run `TlsCertConfig::load` against the test cert
+/// fixtures. The parse-only tests above don't exercise the cert loader, so
+/// regressions like a `.p12` extension in an example would slip through.
+#[cfg(feature = "__tls")]
+#[test]
+fn tls_cert_examples_load() {
+    let workspace_root = env::var("TDNS_WORKSPACE_ROOT").unwrap_or_else(|_| "..".to_owned());
+    let configs_dir = PathBuf::from(&workspace_root).join("tests/test-data/test_configs");
+
+    let mut checked = 0usize;
+    for entry in read_dir(&configs_dir).unwrap() {
+        let entry = entry.unwrap();
+        let file_name = entry.file_name().into_string().unwrap();
+        if !file_name.ends_with(".toml") {
+            continue;
+        }
+        let path = entry.path();
+        let contents = fs::read_to_string(&path).unwrap();
+        // Skip configs that don't have a [tls_cert] block at all.
+        if !contents.contains("[tls_cert]") {
+            continue;
+        }
+        let config: Config = match toml::from_str(&contents) {
+            Ok(c) => c,
+            // Some configs reference features we may not have compiled in.
+            Err(_) => continue,
+        };
+        let Some(tls_cert) = &config.tls_cert else {
+            continue;
+        };
+        tls_cert.load(&configs_dir).unwrap_or_else(|e| {
+            panic!("TLS cert load failed for {}: {e}", path.display());
+        });
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "expected to exercise at least one TLS cert example",
+    );
 }

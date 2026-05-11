@@ -15,7 +15,7 @@ use std::{
     fmt, fs, io,
     marker::PhantomData,
     net::{Ipv4Addr, Ipv6Addr},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -66,6 +66,7 @@ mod tests;
 /// Server configuration
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub(crate) struct Config {
     /// The list of IPv4 addresses to listen on
     #[serde(default)]
@@ -154,10 +155,19 @@ pub(crate) struct Config {
     #[cfg(feature = "__https")]
     #[serde(default = "default_http_endpoint")]
     pub(crate) http_endpoint: String,
-    /// Networks denied to access the server
+    /// Networks denied access to the server.
+    ///
+    /// Requests originating from any of these CIDRs are rejected. If
+    /// `allow_networks` is also set, it acts as an override list: an address
+    /// matched by both is allowed.
     #[serde(default)]
     pub(crate) deny_networks: Vec<IpNet>,
-    /// Networks allowed to access the server
+    /// Networks allowed to access the server.
+    ///
+    /// When non-empty, requests not originating from any of these CIDRs are
+    /// rejected (the server effectively operates as an allow-list). When
+    /// combined with `deny_networks`, entries here override matching deny
+    /// entries.
     #[serde(default)]
     pub(crate) allow_networks: Vec<IpNet>,
     /// UDP socket configuration options.
@@ -250,15 +260,137 @@ fn default_tcp_response_buffer_size() -> usize {
     32
 }
 
+/// Maximum number of entries we'll accept for any single resolver cache
+/// (recursor or forwarder).
+///
+/// Past this, an integer-overflow-large value (or a typo like `1048576000000`)
+/// would silently allocate gigabytes at first request and OOM the process.
+/// 16M entries is generous — at ~200 bytes per cached DNS response that is
+/// still ~3GB of resident memory, which is well past any realistic deployment.
+#[cfg(any(feature = "recursor", feature = "resolver"))]
+const MAX_RESOLVER_CACHE_ENTRIES: u64 = 1 << 24;
+
 impl Config {
     /// read a Config file from the file specified at path.
     pub(crate) fn read_config(path: &Path) -> Result<Self, ConfigError> {
-        Self::from_toml(&fs::read_to_string(path)?)
+        let config = Self::from_toml(&fs::read_to_string(path)?)?;
+        config.check_directory_traversal()?;
+        config.check_open_recursor()?;
+        #[cfg(any(feature = "recursor", feature = "resolver"))]
+        config.check_cache_caps()?;
+        Ok(config)
+    }
+
+    /// Reject `..` components in the `directory` field, which is the base for
+    /// every other relative path in the config. Absolute paths are allowed
+    /// (operators legitimately point `directory` at `/var/named` or similar).
+    fn check_directory_traversal(&self) -> Result<(), ConfigError> {
+        if self
+            .directory
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return Err(ConfigError::DirectoryTraversal {
+                path: self.directory.display().to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// Read a [`Config`] from the given TOML string.
     fn from_toml(toml: &str) -> Result<Self, ConfigError> {
         Ok(toml::from_str(toml)?)
+    }
+
+    /// Reject configurations that would expose a recursive or forwarding
+    /// resolver to the public internet with no client ACL.
+    ///
+    /// A recursor reachable by arbitrary clients can be used for amplification
+    /// DDoS attacks and is the kind of misconfiguration that almost always
+    /// indicates an operator mistake. We block this at parse time so the error
+    /// surfaces before any port is bound.
+    ///
+    /// The check fires when *all* of the following hold:
+    ///   * at least one zone uses a `recursor` or `forward` store;
+    ///   * `allow_networks` is empty (no client allow-list);
+    ///   * at least one listen address is not loopback (or the listen lists
+    ///     are empty, which defaults to binding 0.0.0.0 and ::).
+    fn check_open_recursor(&self) -> Result<(), ConfigError> {
+        if !self.allow_networks.is_empty() {
+            return Ok(());
+        }
+
+        let has_resolver_zone = self.zones.iter().any(|z| {
+            let ZoneTypeConfig::External { stores } = &z.zone_type_config else {
+                return false;
+            };
+            stores.iter().any(is_resolver_store)
+        });
+        if !has_resolver_zone {
+            return Ok(());
+        }
+
+        let listens_anywhere_non_loopback = self.listen_addrs_ipv4.is_empty()
+            && self.listen_addrs_ipv6.is_empty()
+            || self.listen_addrs_ipv4.iter().any(|a| !a.is_loopback())
+            || self.listen_addrs_ipv6.iter().any(|a| !a.is_loopback());
+
+        if listens_anywhere_non_loopback {
+            return Err(ConfigError::OpenRecursor);
+        }
+        Ok(())
+    }
+
+    /// Reject resolver-side cache sizes large enough to be obvious mistakes.
+    /// Covers the recursor (ns/response/validation caches) and the forwarder
+    /// (resolver cache_size). See [`MAX_RESOLVER_CACHE_ENTRIES`].
+    #[cfg(any(feature = "recursor", feature = "resolver"))]
+    fn check_cache_caps(&self) -> Result<(), ConfigError> {
+        #[cfg(all(feature = "recursor", feature = "__dnssec"))]
+        use hickory_resolver::recursor::DnssecPolicyConfig;
+
+        let check = |field: &'static str, value: u64| -> Result<(), ConfigError> {
+            if value > MAX_RESOLVER_CACHE_ENTRIES {
+                Err(ConfigError::CacheSizeTooLarge {
+                    field,
+                    value,
+                    max: MAX_RESOLVER_CACHE_ENTRIES,
+                })
+            } else {
+                Ok(())
+            }
+        };
+
+        for zone in &self.zones {
+            let ZoneTypeConfig::External { stores } = &zone.zone_type_config else {
+                continue;
+            };
+            for store in stores {
+                match store {
+                    #[cfg(feature = "recursor")]
+                    ExternalStoreConfig::Recursor(cfg) => {
+                        check("ns_cache_size", cfg.options.ns_cache_size as u64)?;
+                        check("response_cache_size", cfg.options.response_cache_size)?;
+                        #[cfg(feature = "__dnssec")]
+                        if let DnssecPolicyConfig::ValidateWithStaticKey {
+                            validation_cache_size: Some(size),
+                            ..
+                        } = &cfg.dnssec_policy
+                        {
+                            check("validation_cache_size", *size as u64)?;
+                        }
+                    }
+                    #[cfg(feature = "resolver")]
+                    ExternalStoreConfig::Forward(cfg) => {
+                        if let Some(opts) = &cfg.options {
+                            check("forward.cache_size", opts.cache_size)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -322,9 +454,15 @@ pub(crate) struct ZoneConfig {
 }
 
 impl ZoneConfig {
-    pub(crate) async fn load(
+    /// Load this zone's handlers. When `validate_only` is true, side-effecting
+    /// stores (currently `recursor`, which spawns a persistence task and may
+    /// write state files) are skipped with an info log instead. All other
+    /// stores still parse their backing files so missing-file errors surface
+    /// at `--validate` time.
+    pub(crate) async fn load_with_mode(
         self,
         zone_dir: &Path,
+        validate_only: bool,
     ) -> Result<Vec<Arc<dyn ZoneHandler>>, ProtoError> {
         debug!("loading zone with config: {self:#?}");
 
@@ -421,6 +559,13 @@ impl ZoneConfig {
                         }
                         #[cfg(feature = "recursor")]
                         ExternalStoreConfig::Recursor(config) => {
+                            if validate_only {
+                                info!(
+                                    "skipping recursor store for {zone_name} in --validate mode \
+                                     (avoids spawning persistence task and writing state files)"
+                                );
+                                continue;
+                            }
                             let recursor = RecursiveZoneHandler::try_from_config(
                                 zone_name.clone(),
                                 zone_type,
@@ -657,6 +802,9 @@ impl TlsCertConfig {
             ));
         }
 
+        reject_parent_dir_components(&self.path, "tls_cert.path")?;
+        reject_parent_dir_components(&self.private_key, "tls_cert.private_key")?;
+
         let cert_path = zone_dir.join(&self.path);
         info!(
             "loading TLS PEM certificate chain from: {}",
@@ -705,6 +853,39 @@ impl TlsCertConfig {
     }
 }
 
+/// Whether the given store represents recursive or forwarding resolution,
+/// i.e. the kinds of stores that turn the binary into a public-amplification
+/// risk if exposed without an ACL.
+fn is_resolver_store(store: &ExternalStoreConfig) -> bool {
+    match store {
+        #[cfg(feature = "recursor")]
+        ExternalStoreConfig::Recursor(_) => true,
+        #[cfg(feature = "resolver")]
+        ExternalStoreConfig::Forward(_) => true,
+        _ => false,
+    }
+}
+
+/// Reject paths that contain `..` components.
+///
+/// Absolute paths are allowed (operators legitimately point at e.g. ACME-managed
+/// directories outside `zone_dir`), but parent-dir traversal in a relative path
+/// is never intentional — it usually indicates a confused-deputy or templated
+/// config that escaped its intended sandbox.
+#[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
+fn reject_parent_dir_components(path: &Path, field: &str) -> Result<(), String> {
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        return Err(format!(
+            "{field} must not contain `..` components: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// The error kind for errors that get returned in the crate
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -721,6 +902,34 @@ pub(crate) enum ConfigError {
     /// An error occurred while parsing a zone file
     #[error("failed to parse the zone file: {0}")]
     ZoneParse(#[from] ParseError),
+
+    /// The configuration would expose a recursor or forwarder to arbitrary
+    /// clients with no allow_networks list.
+    #[error(
+        "refusing to start: recursor or forwarder listens on non-loopback addresses with no \
+         `allow_networks` set — this would create an open public resolver. Set `allow_networks` \
+         to the prefixes you intend to serve, or bind only to loopback."
+    )]
+    OpenRecursor,
+
+    /// A recursor cache size field is larger than is plausibly intentional.
+    #[cfg(feature = "recursor")]
+    #[error(
+        "{field} = {value} exceeds the maximum of {max} entries; a value this large is almost \
+         certainly a typo and would cause large up-front allocations"
+    )]
+    CacheSizeTooLarge {
+        field: &'static str,
+        value: u64,
+        max: u64,
+    },
+
+    /// The configured `directory` field contains `..` components.
+    #[error(
+        "`directory` must not contain `..` components: {path}; use an absolute path if the zone \
+         directory is outside the working directory"
+    )]
+    DirectoryTraversal { path: String },
 }
 
 fn parse_request_timeout<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {

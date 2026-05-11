@@ -103,12 +103,15 @@ fn create_records(records: &mut InMemoryZoneHandler) {
 fn create_test() -> InMemoryZoneHandler {
     let origin = Name::parse("test.com.", None).unwrap();
 
+    #[cfg(feature = "__dnssec")]
+    let nx_proof = Some(NxProofKind::Nsec);
+    #[cfg(not(feature = "__dnssec"))]
+    let nx_proof = None;
     let mut records = InMemoryZoneHandler::empty(
         origin.clone(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
-        Some(NxProofKind::Nsec),
+        nx_proof,
     );
 
     create_records(&mut records);

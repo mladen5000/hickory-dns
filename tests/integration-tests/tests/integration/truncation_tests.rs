@@ -100,13 +100,16 @@ fn new_large_catalog(num_records: u32) -> Catalog {
         RrKey::new(name.clone().into(), RecordType::SOA),
         soa_record_set,
     );
+    #[cfg(feature = "__dnssec")]
+    let nx_proof = Some(NxProofKind::Nsec);
+    #[cfg(not(feature = "__dnssec"))]
+    let nx_proof = None;
     let handler = InMemoryZoneHandler::<TokioRuntimeProvider>::new(
         name,
         records,
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
-        Some(NxProofKind::Nsec),
+        nx_proof,
     )
     .unwrap();
 

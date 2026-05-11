@@ -22,7 +22,19 @@ categories.workspace = true
 license.workspace = true
 
 [features]
-default = ["sqlite", "resolver", "rustls-platform-verifier"]
+default = [
+    "sqlite",
+    "resolver",
+    "recursor",
+    "blocklist",
+    "rustls-platform-verifier",
+    "tls-aws-lc-rs",
+    "https-aws-lc-rs",
+    "quic-aws-lc-rs",
+    "dnssec-aws-lc-rs",
+    "ascii-art",
+    "metrics",
+]
 
 # if enabled, the hickory-dns binary will print ascii-art on start, disable to reduce the binary size
 ascii-art = []

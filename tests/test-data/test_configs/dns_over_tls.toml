@@ -1,7 +1,7 @@
 listen_addrs_ipv4 = ["0.0.0.0"]
 
 [tls_cert]
-path = "sec/example.p12"
+path = "sec/example.cert.pem"
 endpoint_name = "ns.example.com"
 private_key = "sec/example.key"
 

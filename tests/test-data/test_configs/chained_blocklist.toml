@@ -1,3 +1,8 @@
+## Restrict clients to loopback by default. A resolver reachable by arbitrary
+## clients can be used for amplification DDoS; the server refuses to start
+## without an explicit allow-list when a forward / recursor zone is configured.
+allow_networks = ["127.0.0.0/8", "::1/128"]
+
 ## Default zones, these should be present on all nameservers, except in rare
 ##  configuration cases
 [[zones]]

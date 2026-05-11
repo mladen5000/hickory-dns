@@ -80,6 +80,22 @@ pub mod dnssec {
     }
 }
 
+/// Stub for when `__dnssec` is disabled.
+///
+/// Keeping the `NxProofKind` type-path live in non-dnssec builds means callers
+/// can write `Option<NxProofKind>` unconditionally. The stub is uninhabited
+/// (no variants), so the only constructible value is `None` — DNSSEC features
+/// are still gated, this just stabilises the public API surface across
+/// feature flags.
+#[cfg(not(feature = "__dnssec"))]
+pub mod dnssec {
+    /// Stub variant of `NxProofKind` for builds without DNSSEC support.
+    ///
+    /// Cannot be constructed; the only legal use is `None::<NxProofKind>`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum NxProofKind {}
+}
+
 /// Returns the current version of Hickory DNS
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

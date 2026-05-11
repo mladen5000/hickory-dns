@@ -1,0 +1,281 @@
+## max_security_config.toml
+##
+## Maximum-hardening recursive-resolver configuration for hickory-dns.
+##
+## Threat model addressed (most specific to least):
+##
+##   1. Passive on-path surveillance of client→server traffic
+##         → DoT (853), DoH (443), DoQ (853/udp) enabled; plaintext UDP/TCP
+##           bound to loopback only so unencrypted queries never leave the host
+##           and can only originate from local clients you trust.
+##
+##   2. Passive on-path surveillance of server→authoritative traffic
+##         → RFC 9539 opportunistic encryption to upstream authoritatives.
+##
+##   3. Active on-path tampering / cache poisoning
+##         → DNSSEC validation with NSEC3 iteration limits; conservative
+##           EDNS payload size to minimise IP-fragmentation poisoning;
+##           bounded positive TTLs so any bogus answer that slips through
+##           expires quickly.
+##
+##   4. DNS-rebinding-based exfil / pivot into the intranet
+##         → deny_answers covering every private / loopback / link-local /
+##           documentation / discard prefix in both v4 and v6.
+##
+##   5. SSRF / port-scan-via-recursor against internal hosts
+##         → deny_server covering the same prefixes; allow_server empty.
+##
+##   6. Resource-exhaustion DoS
+##         → bounded ns/response/validation caches; bounded recursion depth;
+##           SO_REUSEPORT across multiple UDP sockets so kernel load-shedding
+##           is per-socket; tight TCP request timeout to drop Slowloris.
+##
+##   7. Zone-walk / AXFR exfil of authoritative data
+##         → axfr_policy explicitly Deny on every Primary zone (also default).
+##
+##   8. TLS key / session exfil via debugging knobs
+##         → ssl_keylog_enabled explicitly false; comment annotated.
+##
+##   9. Amplification abuse (open-resolver weaponisation)
+##         → allow_networks restricts query sources; deny_networks empty,
+##           because allow-only is stricter than allow+deny.
+##
+##  10. Privilege escalation after start
+##         → user/group drop to nobody; binary must be started as root only
+##           to bind low ports, then drops.
+##
+##  11. Path-traversal in TLS / key paths
+##         → Enforced in code (reject_parent_dir_components, this binary).
+##           Paths below stay relative to `directory`.
+##
+##  12. Accidentally-open recursive resolver
+##         → Enforced in code: the binary refuses to start a recursor or
+##           forwarder on a non-loopback address when `allow_networks` is
+##           empty. This config sets `allow_networks` explicitly.
+##
+## Required build features:
+##     cargo install --path bin \
+##         --features="recursor,blocklist,dnssec-aws-lc-rs,\
+##                     tls-aws-lc-rs,https-aws-lc-rs,quic-aws-lc-rs"
+##   (or the matching *-ring variants).
+##
+## To `--validate` this file from the workspace root:
+##     cargo run -p hickory-dns -- --validate \
+##         -c tests/test-data/test_configs/max_security_config.toml \
+##         -z tests/test-data/test_configs
+
+# ---------------------------------------------------------------------------
+# Listen addresses & ports
+# ---------------------------------------------------------------------------
+
+# Plaintext DNS bound to loopback only. Anything off-host must go through
+# DoT/DoH/DoQ. Empty lists would bind 0.0.0.0/:: which is rarely what you want.
+listen_addrs_ipv4 = ["127.0.0.1"]
+listen_addrs_ipv6 = ["::1"]
+listen_port       = 53
+
+# Encrypted transports listen on all interfaces.
+tls_listen_port   = 853
+https_listen_port = 443
+quic_listen_port  = 853
+
+# ---------------------------------------------------------------------------
+# Per-transport switches (every transport enabled; defaults shown for clarity).
+# Set any of these to true to drop the corresponding transport entirely.
+# ---------------------------------------------------------------------------
+
+# disable_tcp   = false
+# disable_udp   = false
+# disable_tls   = false
+# disable_https = false
+# disable_quic  = false
+
+# TLS session-key logging stays off. Leaving SSLKEYLOGFILE in the environment
+# of a hickory-dns process built with this feature would otherwise let anything
+# with read access to that path decrypt captured DoT/DoH/DoQ traffic.
+ssl_keylog_enabled = false
+
+# Drop Slowloris-style TCP clients fast. Default is 5s; 2s is aggressive but
+# safe for a recursor on a trusted network.
+tcp_request_timeout = 2
+
+# ---------------------------------------------------------------------------
+# Client ACL
+# ---------------------------------------------------------------------------
+
+# Allow-list is strictly more secure than deny-list for an internet-facing
+# resolver. Replace 10.0.0.0/8 with the prefixes you actually serve before
+# deploying. An empty allow_networks list means *all* sources are allowed.
+allow_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "fc00::/7"]
+deny_networks  = []
+
+# ---------------------------------------------------------------------------
+# Process identity
+# ---------------------------------------------------------------------------
+
+user  = "nobody"
+group = "nobody"
+
+# ---------------------------------------------------------------------------
+# Socket / kernel buffer tuning (DoS resilience)
+# ---------------------------------------------------------------------------
+
+[udp_socket]
+# Larger kernel buffers absorb traffic bursts. The kernel may cap these; the
+# server now warns at startup if it does. Tune net.core.{r,w}mem_max to match.
+recv_buffer_size = 4194304   # 4 MiB
+send_buffer_size = 4194304   # 4 MiB
+# Multiple bound sockets + SO_REUSEPORT let the kernel hash incoming packets
+# across sockets, isolating one floods-victim socket from the others.
+sockets = 4
+
+[tcp_socket]
+# Higher listen backlog absorbs SYN bursts. Match net.core.somaxconn.
+listen_backlog       = 4096
+# Larger response queue prevents drops under sustained per-connection load.
+response_buffer_size = 1024
+
+# ---------------------------------------------------------------------------
+# TLS certificate (shared by DoT, DoH, DoQ)
+# ---------------------------------------------------------------------------
+#
+# Paths are joined to `directory` (or the -z command-line flag). `..` in
+# either path is rejected at parse time.
+
+[tls_cert]
+path          = "sec/example.cert.pem"
+private_key   = "sec/example.key.pem"
+endpoint_name = "ns.example.com"
+
+# ---------------------------------------------------------------------------
+# Default zones — every recursor should answer these locally so the queries
+# never leak upstream to anyone who might be logging them.
+# ---------------------------------------------------------------------------
+
+[[zones]]
+zone        = "localhost"
+zone_type   = "Primary"
+axfr_policy = "Deny"
+file        = "default/localhost.zone"
+
+[[zones]]
+zone        = "0.0.127.in-addr.arpa"
+zone_type   = "Primary"
+axfr_policy = "Deny"
+file        = "default/127.0.0.1.zone"
+
+[[zones]]
+zone        = "0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa"
+zone_type   = "Primary"
+axfr_policy = "Deny"
+file        = "default/ipv6_1.zone"
+
+[[zones]]
+zone        = "255.in-addr.arpa"
+zone_type   = "Primary"
+axfr_policy = "Deny"
+file        = "default/255.zone"
+
+[[zones]]
+zone        = "0.in-addr.arpa"
+zone_type   = "Primary"
+axfr_policy = "Deny"
+file        = "default/0.zone"
+
+# ---------------------------------------------------------------------------
+# Recursive resolver for the root zone
+# ---------------------------------------------------------------------------
+
+[[zones]]
+zone      = "."
+zone_type = "External"
+
+[zones.stores]
+type                 = "recursor"
+roots                = "default/root.zone"
+ns_cache_size        = 1024
+response_cache_size  = 1048576
+recursion_limit      = 16
+ns_recursion_limit   = 16
+
+# DNS Flag Day 2020 value. Larger payloads invite IP-fragmentation-based
+# cache-poisoning attacks; smaller risks unnecessary TCP fallback.
+edns_payload_len = 1232
+
+# Anti-rebinding: drop upstream answers pointing at internal address space.
+allow_answers = []
+deny_answers = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "0.0.0.0/8",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "240.0.0.0/4",
+    "255.255.255.255/32",
+    "::/128",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/64",
+    "ff00::/8",
+    "2001:db8::/32",
+    "100::/64",
+    "3fff::/20",
+    "5f00::/16",
+]
+
+# Anti-SSRF: refuse to send recursive queries to internal address space.
+allow_server = []
+deny_server = [
+    "0.0.0.0/8",
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "100.64.0.0/10",
+    "192.0.0.0/24",
+    "192.0.2.0/24",
+    "198.51.100.0/24",
+    "203.0.113.0/24",
+    "240.0.0.0/4",
+    "255.255.255.255/32",
+    "::/128",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/64",
+    "ff00::/8",
+    "2001:db8::/32",
+    "100::/64",
+]
+
+# Bounded TTLs cap how long any one bad answer persists in the cache.
+[zones.stores.cache_policy.default]
+positive_max_ttl = 86400
+
+[zones.stores.cache_policy.A]
+positive_max_ttl = 3600
+
+[zones.stores.cache_policy.AAAA]
+positive_max_ttl = 3600
+
+# DNSSEC validation. Tight NSEC3 iteration limits so a hostile signed zone
+# cannot force the resolver into expensive iteration loops.
+[zones.stores.dnssec_policy.ValidateWithStaticKey]
+# trust_anchor                 = "/var/named/root.key"   # uncomment to override built-in
+nsec3_soft_iteration_limit = 50
+nsec3_hard_iteration_limit = 150
+validation_cache_size      = 1048576
+
+# RFC 9539 opportunistic encryption to authoritatives. Once an authoritative
+# is observed supporting DoT or DoQ, plaintext queries to it are avoided.
+[zones.stores.opportunistic_encryption.enabled]
+persistence_period    = 259200   # 3 days
+damping_period        = 86400    # 1 day
+max_concurrent_probes = 10
+persistence           = { path = "opp_enc_state.toml", save_interval = 600 }

@@ -16,9 +16,9 @@ use std::{
     sync::Arc,
 };
 
+use crate::dnssec::NxProofKind;
 #[cfg(feature = "__dnssec")]
 use crate::{
-    dnssec::NxProofKind,
     net::runtime::Time,
     proto::dnssec::{
         DnsSecResult, DnssecSigner,
@@ -85,15 +85,12 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
         records: BTreeMap<RrKey, RecordSet>,
         zone_type: ZoneType,
         axfr_policy: AxfrPolicy,
-        #[cfg(feature = "__dnssec")] nx_proof_kind: Option<NxProofKind>,
+        nx_proof_kind: Option<NxProofKind>,
     ) -> Result<Self, String> {
-        let mut this = Self::empty(
-            origin.clone(),
-            zone_type,
-            axfr_policy,
-            #[cfg(feature = "__dnssec")]
-            nx_proof_kind,
-        );
+        // See `empty` for the cross-feature stability rationale.
+        #[cfg(not(feature = "__dnssec"))]
+        let _ = &nx_proof_kind;
+        let mut this = Self::empty(origin.clone(), zone_type, axfr_policy, nx_proof_kind);
         let inner = this.inner.get_mut();
 
         // SOA must be present
@@ -125,17 +122,26 @@ impl<P: RuntimeProvider + Send + Sync> InMemoryZoneHandler<P> {
         Ok(this)
     }
 
-    /// Creates an empty ZoneHandler
+    /// Creates an empty ZoneHandler.
+    ///
+    /// The `nx_proof_kind` argument is accepted regardless of build features
+    /// so that callers in unrelated workspace crates do not have to gate their
+    /// call sites on `__dnssec`. When the `__dnssec` feature is disabled,
+    /// `NxProofKind` is an uninhabited stub and the only legal value is `None`.
     ///
     /// # Warning
     ///
-    /// This is an invalid zone, SOA must be added
+    /// This is an invalid zone, SOA must be added.
     pub fn empty(
         origin: Name,
         zone_type: ZoneType,
         axfr_policy: AxfrPolicy,
-        #[cfg(feature = "__dnssec")] nx_proof_kind: Option<NxProofKind>,
+        nx_proof_kind: Option<NxProofKind>,
     ) -> Self {
+        // Without `__dnssec`, `NxProofKind` is uninhabited and `nx_proof_kind`
+        // can only be `None`, so the field-assignment is feature-gated below.
+        #[cfg(not(feature = "__dnssec"))]
+        let _ = nx_proof_kind;
         Self {
             origin: LowerName::new(&origin),
             class: DNSClass::IN,

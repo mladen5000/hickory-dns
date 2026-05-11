@@ -80,7 +80,7 @@ impl FileZoneHandler {
         config: &FileConfig,
         #[cfg(feature = "__dnssec")] nx_proof_kind: Option<NxProofKind>,
     ) -> Result<Self, String> {
-        let zone_path = rooted(&config.zone_path, root_dir);
+        let zone_path = rooted(&config.zone_path, root_dir)?;
         let records = zone_from_path(&zone_path, origin.clone())
             .map_err(|e| format!("failed to load zone file: {e}"))?;
 
@@ -99,6 +99,8 @@ impl FileZoneHandler {
                 axfr_policy,
                 #[cfg(feature = "__dnssec")]
                 nx_proof_kind,
+                #[cfg(not(feature = "__dnssec"))]
+                None,
             )?,
         })
     }
@@ -252,11 +254,28 @@ pub struct FileConfig {
     pub zone_path: PathBuf,
 }
 
-pub(crate) fn rooted(zone_file: &Path, root_dir: Option<&Path>) -> PathBuf {
-    match root_dir {
+/// Resolve a configured file path against an optional root directory, rejecting
+/// any path that contains a `..` component.
+///
+/// Absolute paths bypass `root_dir` (this matches the legacy [`Path::join`]
+/// semantics that operators rely on for things like ACME-managed cert
+/// directories), but parent-dir traversal in a relative path is never
+/// intentional and almost always indicates either a confused-deputy bug or a
+/// templated config that escaped its sandbox.
+pub(crate) fn rooted(zone_file: &Path, root_dir: Option<&Path>) -> Result<PathBuf, String> {
+    if zone_file
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "configured path must not contain `..` components: {}",
+            zone_file.display()
+        ));
+    }
+    Ok(match root_dir {
         Some(root) => root.join(zone_file),
         None => zone_file.to_owned(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -275,13 +294,23 @@ mod tests {
     fn test_load_zone() {
         subscribe();
 
+        // Build an absolute path off CARGO_MANIFEST_DIR — relative paths with
+        // `..` components are now rejected by `rooted` since they're a
+        // confused-deputy footgun outside of test fixtures.
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         #[cfg(feature = "__dnssec")]
         let config = FileConfig {
-            zone_path: PathBuf::from("../../tests/test-data/test_configs/dnssec/example.com.zone"),
+            zone_path: manifest_dir
+                .join("../../tests/test-data/test_configs/dnssec/example.com.zone")
+                .canonicalize()
+                .expect("test fixture not found"),
         };
         #[cfg(not(feature = "__dnssec"))]
         let config = FileConfig {
-            zone_path: PathBuf::from("../../tests/test-data/test_configs/example.com.zone"),
+            zone_path: manifest_dir
+                .join("../../tests/test-data/test_configs/example.com.zone")
+                .canonicalize()
+                .expect("test fixture not found"),
         };
         let handler = FileZoneHandler::try_from_config(
             Name::from_str("example.com.").unwrap(),

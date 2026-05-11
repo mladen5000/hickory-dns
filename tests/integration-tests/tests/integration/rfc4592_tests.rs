@@ -267,7 +267,6 @@ async fn setup() -> (Client<TokioRuntimeProvider>, Server<Catalog>) {
         origin.clone(),
         ZoneType::Primary,
         AxfrPolicy::Deny,
-        #[cfg(feature = "__dnssec")]
         None,
     );
     handler.upsert_mut(

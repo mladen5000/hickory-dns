@@ -1,3 +1,9 @@
+## Restrict clients to loopback by default. A recursor reachable by arbitrary
+## clients can be used for amplification DDoS; the server refuses to start
+## without an explicit allow-list when a recursor zone is configured. Replace
+## these prefixes with the networks you actually serve.
+allow_networks = ["127.0.0.0/8", "::1/128"]
+
 ## UDP socket buffer configuration
 ## Under high query load, increasing buffer sizes and the count of bound UDP
 ## sockets can help prevent packet loss.

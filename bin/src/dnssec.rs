@@ -7,7 +7,7 @@
 
 //! Configuration types for all security options in hickory-dns
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use rustls_pki_types::PrivateKeyDer;
 use rustls_pki_types::pem::PemObject;
@@ -88,6 +88,22 @@ impl KeyConfig {
                 .map_err(|e| format!("error loading signer name: {e}"))?,
             Err(e) => return Err(format!("error loading signer name: {e}")),
         };
+
+        // Refuse paths with `..` components. Signing keys are the most
+        // sensitive material in the config; a confused-deputy traversal here
+        // could read an arbitrary file off the host as if it were a key.
+        // Absolute paths are still permitted (operators legitimately keep
+        // keys outside the zone directory).
+        if self
+            .key_path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return Err(format!(
+                "key_path must not contain `..` components: {}",
+                self.key_path.display()
+            ));
+        }
 
         // read the key in
         let key = key_from_file(&self.key_path, self.algorithm)?;
