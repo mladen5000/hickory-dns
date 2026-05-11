@@ -9,6 +9,8 @@ use toml::map::Keys;
 use toml::value::Array;
 use toml::{Table, Value};
 
+#[cfg(unix)]
+use super::MAX_UDP_SOCKETS;
 use super::{Config, ConfigError, ServerZoneConfig};
 #[cfg(feature = "resolver")]
 use super::{FileConfig, ServerStoreConfig, ZoneTypeConfig};
@@ -623,7 +625,10 @@ fn recursor_cache_size_too_large_is_rejected() {
     .unwrap();
     assert!(matches!(
         config.check_cache_caps(),
-        Err(ConfigError::CacheSizeTooLarge { field: "response_cache_size", .. })
+        Err(ConfigError::CacheSizeTooLarge {
+            field: "response_cache_size",
+            ..
+        })
     ));
 }
 
@@ -648,7 +653,10 @@ fn forwarder_cache_size_too_large_is_rejected() {
     .unwrap();
     assert!(matches!(
         config.check_cache_caps(),
-        Err(ConfigError::CacheSizeTooLarge { field: "forward.cache_size", .. })
+        Err(ConfigError::CacheSizeTooLarge {
+            field: "forward.cache_size",
+            ..
+        })
     ));
 }
 
@@ -685,6 +693,34 @@ fn directory_with_parent_dir_components_is_rejected() {
 fn absolute_directory_without_parent_dir_is_allowed() {
     let config = Config::from_toml(r#"directory = "/var/named""#).unwrap();
     config.check_directory_traversal().unwrap();
+}
+
+#[test]
+fn zonedir_with_parent_dir_components_is_rejected() {
+    assert!(matches!(
+        Config::check_directory_path(Path::new("../../../etc"), "zonedir"),
+        Err(ConfigError::DirectoryTraversal {
+            field: "zonedir",
+            ..
+        })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn udp_socket_count_above_cap_is_rejected() {
+    let config = Config::from_toml(&format!(
+        r#"
+            [udp_socket]
+            sockets = {}
+        "#,
+        MAX_UDP_SOCKETS + 1
+    ))
+    .unwrap();
+    assert!(matches!(
+        config.check_udp_socket_caps(),
+        Err(ConfigError::UdpSocketCountTooLarge { .. })
+    ));
 }
 
 #[test]

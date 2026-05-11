@@ -38,25 +38,25 @@ zone_type = "Primary"
 file = "example.com.zone"
 
 [[zones.keys]]
-key_path = "../tests/test-data/test_configs/dnssec/rsa_2048.pk8"
+key_path = "dnssec/rsa_2048.pk8"
 ## specify the algorithm
 algorithm = "RSASHA256"
 
 [[zones.keys]]
-key_path = "../tests/test-data/test_configs/dnssec/rsa_2048.pk8"
+key_path = "dnssec/rsa_2048.pk8"
 algorithm = "RSASHA512"
 
 [[zones.keys]]
 # Requires --features=ring
-key_path = "../tests/test-data/test_configs/dnssec/ecdsa_p256.pk8"
+key_path = "dnssec/ecdsa_p256.pk8"
 algorithm = "ECDSAP256SHA256"
 
 [[zones.keys]]
 # Requires --features=ring
-key_path = "../tests/test-data/test_configs/dnssec/ecdsa_p384.pk8"
+key_path = "dnssec/ecdsa_p384.pk8"
 algorithm = "ECDSAP384SHA384"
 
 [[zones.keys]]
 # Requires --features=ring
-key_path = "../tests/test-data/test_configs/dnssec/ed25519.pk8"
+key_path = "dnssec/ed25519.pk8"
 algorithm = "ED25519"

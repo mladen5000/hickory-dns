@@ -5,6 +5,8 @@ mod in_memory;
 mod named_https_tests;
 #[cfg(feature = "prometheus-metrics")]
 mod named_metrics_tests;
+#[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
+mod named_missing_tls_cert_tests;
 mod named_quic_tests;
 #[cfg(feature = "recursor")]
 mod named_rfc_9539_tests;

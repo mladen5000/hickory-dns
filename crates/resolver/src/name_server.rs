@@ -902,6 +902,7 @@ mod tests {
     use crate::proto::rr::{Name, RData, Record, RecordType};
 
     #[tokio::test]
+    #[ignore = "flaky test against internet server"]
     async fn test_name_server() {
         subscribe();
 

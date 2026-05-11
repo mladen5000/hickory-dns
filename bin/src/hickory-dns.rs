@@ -60,7 +60,7 @@ fn run() -> Result<(), String> {
 
     // Setup tracing for logging based on input
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(
             EnvFilter::builder()
                 .with_default_directive(level.into())

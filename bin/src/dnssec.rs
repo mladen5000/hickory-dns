@@ -26,6 +26,7 @@ use hickory_server::zone_handler::DnssecZoneHandler;
 pub(super) async fn load_keys(
     handler: &mut impl DnssecZoneHandler,
     zone_name: &Name,
+    zone_dir: &Path,
     keys: &[KeyConfig],
 ) -> Result<(), String> {
     if keys.is_empty() {
@@ -33,7 +34,9 @@ pub(super) async fn load_keys(
     }
 
     for key_config in keys {
-        key_config.load(handler, zone_name.clone()).await?;
+        key_config
+            .load(handler, zone_name.clone(), zone_dir)
+            .await?;
     }
 
     info!("signing zone: {zone_name}");
@@ -80,7 +83,11 @@ impl KeyConfig {
     /// keys are listed in pairs of key_name and algorithm, the search path is the
     /// same directory has the zone $file:
     ///  keys = [ "my_rsa_2048|RSASHA256", "/path/to/my_ed25519|ED25519" ]
-    pub fn try_into_signer(&self, signer_name: impl IntoName) -> Result<DnssecSigner, String> {
+    pub fn try_into_signer_from_dir(
+        &self,
+        signer_name: impl IntoName,
+        zone_dir: &Path,
+    ) -> Result<DnssecSigner, String> {
         let name = match self.signer_name() {
             Ok(Some(name)) => name,
             Ok(None) => signer_name
@@ -105,8 +112,14 @@ impl KeyConfig {
             ));
         }
 
+        let key_path = if self.key_path.is_absolute() {
+            self.key_path.clone()
+        } else {
+            zone_dir.join(&self.key_path)
+        };
+
         // read the key in
-        let key = key_from_file(&self.key_path, self.algorithm)?;
+        let key = key_from_file(&key_path, self.algorithm)?;
 
         // add the key to the zone
         // TODO: allow the duration of signatures to be customized
@@ -129,15 +142,20 @@ impl KeyConfig {
         Ok(signer)
     }
 
+    pub fn try_into_signer(&self, signer_name: impl IntoName) -> Result<DnssecSigner, String> {
+        self.try_into_signer_from_dir(signer_name, Path::new(""))
+    }
+
     pub async fn load(
         &self,
         handler: &mut impl DnssecZoneHandler,
         zone_name: Name,
+        zone_dir: &Path,
     ) -> Result<(), String> {
         info!("adding key to zone: {:?}", self.key_path,);
 
         let zone_signer = self
-            .try_into_signer(zone_name)
+            .try_into_signer_from_dir(zone_name, zone_dir)
             .map_err(|e| format!("failed to load key: {:?} msg: {}", self.key_path, e))?;
         handler
             .add_zone_signing_key(zone_signer)

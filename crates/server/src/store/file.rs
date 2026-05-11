@@ -297,7 +297,7 @@ mod tests {
         // Build an absolute path off CARGO_MANIFEST_DIR — relative paths with
         // `..` components are now rejected by `rooted` since they're a
         // confused-deputy footgun outside of test fixtures.
-        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         #[cfg(feature = "__dnssec")]
         let config = FileConfig {
             zone_path: manifest_dir

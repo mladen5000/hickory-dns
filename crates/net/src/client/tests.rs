@@ -289,6 +289,7 @@ async fn test_stream_xfr_valid_ixfr_multipart() {
 }
 
 #[tokio::test]
+#[ignore = "flaky test against internet server"]
 async fn async_client() {
     subscribe();
     use crate::client::{Client, ClientHandle};

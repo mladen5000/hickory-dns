@@ -2,7 +2,6 @@
 #![allow(unreachable_pub)]
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
 use std::str::FromStr;
 
 use futures_executor::block_on;
@@ -378,7 +377,9 @@ pub fn add_signers<A: DnssecZoneHandler>(handler: &mut A) -> Vec<DNSKEY> {
     // rsa
     {
         let key_config = KeyConfig {
-            key_path: PathBuf::from("../tests/test-data/test_configs/dnssec/rsa_2048.pk8"),
+            key_path: crate::zone_handler_battery::fixture_path(
+                "tests/test-data/test_configs/dnssec/rsa_2048.pk8",
+            ),
             algorithm: Algorithm::RSASHA512,
             signer_name: Some(signer_name.to_string()),
         };
@@ -394,7 +395,9 @@ pub fn add_signers<A: DnssecZoneHandler>(handler: &mut A) -> Vec<DNSKEY> {
     // ecdsa_p256
     {
         let key_config = KeyConfig {
-            key_path: PathBuf::from("../tests/test-data/test_configs/dnssec/ecdsa_p256.pk8"),
+            key_path: crate::zone_handler_battery::fixture_path(
+                "tests/test-data/test_configs/dnssec/ecdsa_p256.pk8",
+            ),
             algorithm: Algorithm::ECDSAP256SHA256,
             signer_name: Some(signer_name.clone().to_string()),
         };
@@ -410,7 +413,9 @@ pub fn add_signers<A: DnssecZoneHandler>(handler: &mut A) -> Vec<DNSKEY> {
     // ecdsa_p384
     {
         let key_config = KeyConfig {
-            key_path: PathBuf::from("../tests/test-data/test_configs/dnssec/ecdsa_p384.pk8"),
+            key_path: crate::zone_handler_battery::fixture_path(
+                "tests/test-data/test_configs/dnssec/ecdsa_p384.pk8",
+            ),
             algorithm: Algorithm::ECDSAP384SHA384,
             signer_name: Some(signer_name.clone().to_string()),
         };
@@ -427,7 +432,9 @@ pub fn add_signers<A: DnssecZoneHandler>(handler: &mut A) -> Vec<DNSKEY> {
     #[cfg(feature = "__dnssec")]
     {
         let key_config = KeyConfig {
-            key_path: PathBuf::from("../tests/test-data/test_configs/dnssec/ed25519.pk8"),
+            key_path: crate::zone_handler_battery::fixture_path(
+                "tests/test-data/test_configs/dnssec/ed25519.pk8",
+            ),
             algorithm: Algorithm::ED25519,
             signer_name: Some(signer_name.to_string()),
         };
@@ -449,8 +456,8 @@ macro_rules! define_dnssec_test {
             #[test]
             fn $f () {
                 ::test_support::subscribe();
-                use std::path::Path;
-                let mut handler = $new(&Path::new("../tests/test-data/test_configs/example.com.zone"), module_path!(), stringify!($f));
+                let zone_path = crate::zone_handler_battery::fixture_path("tests/test-data/test_configs/example.com.zone");
+                let mut handler = $new(zone_path.as_path(), module_path!(), stringify!($f));
                 let keys = crate::zone_handler_battery::dnssec::add_signers(&mut handler);
                 crate::zone_handler_battery::dnssec::$f(handler, &keys);
             }

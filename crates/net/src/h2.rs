@@ -507,6 +507,7 @@ mod tests {
 
     #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
     #[tokio::test]
+    #[ignore = "flaky test against internet server"]
     async fn test_https_google() {
         subscribe();
 
@@ -576,6 +577,7 @@ mod tests {
 
     #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
     #[tokio::test]
+    #[ignore = "flaky test against internet server"]
     async fn test_https_google_with_pure_ip_address_server() {
         subscribe();
 

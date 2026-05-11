@@ -56,6 +56,7 @@ async fn test_query_nonet() {
 }
 
 #[tokio::test]
+#[ignore = "flaky test against internet server"]
 async fn test_query_udp_ipv4() {
     subscribe();
     let stream = UdpClientStream::builder(GOOGLE_V4, TokioRuntimeProvider::new()).build();
@@ -83,6 +84,7 @@ async fn test_query_udp_ipv6() {
 }
 
 #[tokio::test]
+#[ignore = "flaky test against internet server"]
 async fn test_query_tcp_ipv4() {
     subscribe();
     let (future, sender) = TcpClientStream::new(GOOGLE_V4, None, None, TokioRuntimeProvider::new());

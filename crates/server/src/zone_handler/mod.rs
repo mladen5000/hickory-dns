@@ -182,9 +182,13 @@ pub trait ZoneHandler: Send + Sync {
     #[cfg(feature = "__dnssec")]
     async fn nsec3_records(
         &self,
-        info: Nsec3QueryInfo<'_>,
-        lookup_options: LookupOptions,
-    ) -> LookupControlFlow<AuthLookup>;
+        _info: Nsec3QueryInfo<'_>,
+        _lookup_options: LookupOptions,
+    ) -> LookupControlFlow<AuthLookup> {
+        LookupControlFlow::Continue(Err(LookupError::from(io::Error::other(
+            "getting NSEC3 records is unimplemented for this zone handler",
+        ))))
+    }
 
     /// Returns all records in the zone.
     ///
@@ -203,7 +207,9 @@ pub trait ZoneHandler: Send + Sync {
 
     /// Returns the kind of non-existence proof used for this zone.
     #[cfg(feature = "__dnssec")]
-    fn nx_proof_kind(&self) -> Option<&NxProofKind>;
+    fn nx_proof_kind(&self) -> Option<&NxProofKind> {
+        None
+    }
 
     /// Returns the zone handler metrics label.
     fn metrics_label(&self) -> &'static str;

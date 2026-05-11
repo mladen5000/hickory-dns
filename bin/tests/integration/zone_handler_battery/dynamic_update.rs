@@ -736,8 +736,8 @@ macro_rules! define_update_test {
             #[test]
             fn $f () {
                 ::test_support::subscribe();
-                use std::path::Path;
-                let mut handler = $new(&Path::new("../tests/test-data/test_configs/example.com.zone"), module_path!(), stringify!($f));
+                let zone_path = crate::zone_handler_battery::fixture_path("tests/test-data/test_configs/example.com.zone");
+                let mut handler = $new(zone_path.as_path(), module_path!(), stringify!($f));
                 let keys = crate::zone_handler_battery::dynamic_update::add_auth(&mut handler);
                 crate::zone_handler_battery::dynamic_update::$f(handler, &keys);
             }

@@ -49,6 +49,6 @@ journal_path = "example.com_dnssec_update.jrnl"
 allow_update = true
 
 [[zones.keys]]
-key_path = "../tests/test-data/test_configs/dnssec/rsa_2048.pk8"
+key_path = "dnssec/rsa_2048.pk8"
 ## specify the algorithm
 algorithm = "RSASHA256"

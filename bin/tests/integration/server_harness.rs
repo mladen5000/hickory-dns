@@ -3,9 +3,10 @@
 use std::{
     collections::HashMap,
     env,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     net::SocketAddr,
-    process::{Child, ChildStdout, Command, Stdio},
+    path::PathBuf,
+    process::{Child, ChildStderr, Command, Stdio},
     str::FromStr,
     time::*,
 };
@@ -92,29 +93,40 @@ fn collect_and_print<R: BufRead>(read: &mut R, output: &mut String) {
 pub struct TestServer {
     pub ports: SocketPorts,
     child: Child,
-    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
 }
 
 impl TestServer {
     /// Spins up a Server and handles shutting it down after running the test
     #[allow(dead_code)]
     pub fn start(toml: &str) -> Self {
-        let server_path = env::var("TDNS_WORKSPACE_ROOT").unwrap_or_else(|_| "..".to_owned());
-        println!("using server src path: {server_path}");
+        let server_path = env::var_os("TDNS_WORKSPACE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .expect("bin crate should have a workspace parent")
+                    .to_path_buf()
+            })
+            .canonicalize()
+            .expect("failed to canonicalize workspace root");
+        println!("using server src path: {}", server_path.display());
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_hickory-dns"));
         command
-        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .env(
             "RUST_LOG",
             "hickory_dns=debug,hickory_client=debug,hickory_proto=debug,hickory_resolver=debug,hickory_server=debug",
         )
         .arg("-d")
         .arg(format!(
-            "--config={server_path}/tests/test-data/test_configs/{toml}"
+            "--config={}/tests/test-data/test_configs/{toml}",
+            server_path.display()
         ))
         .arg(format!(
-            "--zonedir={server_path}/tests/test-data/test_configs"
+            "--zonedir={}/tests/test-data/test_configs",
+            server_path.display()
         ))
         .arg(format!("--port={}", 0));
         #[cfg(feature = "__tls")]
@@ -132,7 +144,7 @@ impl TestServer {
 
         println!("server starting");
 
-        let mut stdout = BufReader::new(named.stdout.take().expect("no stdout"));
+        let mut stderr = BufReader::new(named.stderr.take().expect("no stderr"));
 
         // These will be collected from the server startup output
         let mut ports = SocketPorts::default();
@@ -149,10 +161,12 @@ impl TestServer {
 
         while Instant::now() < wait_for_start_until {
             if let Some(ret_code) = named.try_wait().expect("failed to check status of named") {
-                panic!("named has already exited with code: {ret_code}");
+                let mut stderr_output = String::new();
+                let _ = stderr.read_to_string(&mut stderr_output);
+                panic!("named has already exited with code: {ret_code}\n{stderr_output}");
             }
 
-            collect_and_print(&mut stdout, &mut output);
+            collect_and_print(&mut stderr, &mut output);
 
             if let Some(addr) = addr_regex.captures(&output) {
                 let proto = addr.get(1).expect("missing protocol").as_str();
@@ -188,7 +202,7 @@ impl TestServer {
         Self {
             ports,
             child: named,
-            stdout,
+            stderr,
         }
     }
 }
@@ -202,14 +216,14 @@ impl Drop for TestServer {
 
         let mut line = String::new();
         loop {
-            match self.stdout.read_line(&mut line) {
+            match self.stderr.read_line(&mut line) {
                 Ok(0) => break,
                 Ok(_) => {
                     print!("SRV: {line}");
                     line.clear();
                 }
                 Err(err) => {
-                    warn!("could not read remaining stdout: {err}");
+                    warn!("could not read remaining stderr: {err}");
                     break;
                 }
             }

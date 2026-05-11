@@ -200,6 +200,10 @@ impl DnsServer {
         info!("loading configuration from: {config_path:?}");
         let config = Config::read_config(config_path)
             .map_err(|err| format!("failed to read config file from {config_path:?}: {err}"))?;
+        if let Some(zonedir) = &zonedir {
+            Config::check_directory_path(zonedir, "zonedir")
+                .map_err(|err| format!("invalid zonedir override: {err}"))?;
+        }
 
         #[cfg(feature = "prometheus-metrics")]
         let disable_prometheus = disable_prometheus | config.disable_prometheus;

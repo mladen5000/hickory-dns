@@ -1056,6 +1056,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "flaky test against internet server"]
     async fn test_multi_use_conns() {
         subscribe();
 

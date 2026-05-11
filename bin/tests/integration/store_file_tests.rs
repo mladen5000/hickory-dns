@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{path::Path, str::FromStr};
 
 use hickory_proto::rr::{LowerName, Name, RecordType, RrKey};
 #[cfg(feature = "__dnssec")]
@@ -35,7 +32,9 @@ dnssec_battery!(file, crate::store_file_tests::file);
 fn test_all_lines_are_loaded() {
     subscribe();
     let config = FileConfig {
-        zone_path: PathBuf::from("../tests/test-data/test_configs/default/nonewline.zone"),
+        zone_path: crate::zone_handler_battery::fixture_path(
+            "tests/test-data/test_configs/default/nonewline.zone",
+        ),
     };
 
     let mut handler = FileZoneHandler::try_from_config(
@@ -59,7 +58,9 @@ fn test_all_lines_are_loaded() {
 fn test_implicit_in_class() {
     subscribe();
     let config = FileConfig {
-        zone_path: PathBuf::from("../tests/test-data/test_configs/default/implicitclass.zone"),
+        zone_path: crate::zone_handler_battery::fixture_path(
+            "tests/test-data/test_configs/default/implicitclass.zone",
+        ),
     };
 
     let handler = FileZoneHandler::try_from_config(
@@ -78,7 +79,9 @@ fn test_implicit_in_class() {
 async fn test_ttl_wildcard() {
     subscribe();
     let config = FileConfig {
-        zone_path: PathBuf::from("../tests/test-data/test_configs/default/test.local.zone"),
+        zone_path: crate::zone_handler_battery::fixture_path(
+            "tests/test-data/test_configs/default/test.local.zone",
+        ),
     };
 
     let zone_name = LowerName::from_str("test.local.").unwrap();

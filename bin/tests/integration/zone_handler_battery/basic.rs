@@ -929,8 +929,8 @@ macro_rules! define_basic_test {
             #[test]
             fn $f () {
                 subscribe();
-                use std::path::Path;
-                let handler = $new(&Path::new("../tests/test-data/test_configs/example.com.zone"), module_path!(), stringify!($f));
+                let zone_path = crate::zone_handler_battery::fixture_path("tests/test-data/test_configs/example.com.zone");
+                let handler = $new(zone_path.as_path(), module_path!(), stringify!($f));
                 crate::zone_handler_battery::basic::$f(handler);
             }
         )*

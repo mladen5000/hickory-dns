@@ -101,6 +101,7 @@ async fn test_query_udp() {
 }
 
 #[tokio::test]
+#[ignore = "flaky test against internet server"]
 async fn test_query_udp_edns() {
     subscribe();
     let client = udp_client(GOOGLE_V4).await;

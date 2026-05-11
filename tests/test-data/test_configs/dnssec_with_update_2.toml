@@ -54,6 +54,6 @@ key_file = "dnssec/tsig_update.key"
 algorithm = "hmac-sha256"
 
 [[zones.keys]]
-key_path = "../tests/test-data/test_configs/dnssec/rsa_2048.pk8"
+key_path = "dnssec/rsa_2048.pk8"
 ## specify the algorithm
 algorithm = "RSASHA256"

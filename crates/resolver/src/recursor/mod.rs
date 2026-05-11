@@ -148,7 +148,11 @@ impl<P: ConnectionProvider> Recursor<P> {
     ) -> Result<Self, RecursorError> {
         let mut tls_config = TlsConfig::new()?;
         if options.opportunistic_encryption.is_enabled() {
-            warn!("disabling TLS peer verification for opportunistic encryption mode");
+            warn!(
+                "disabling TLS/QUIC peer verification for recursive upstream opportunistic \
+                 encryption, as required by RFC 9539; this does not affect authoritative listener \
+                 TLS certificates"
+            );
             tls_config.insecure_skip_verify();
         }
 

@@ -270,6 +270,9 @@ fn default_tcp_response_buffer_size() -> usize {
 #[cfg(any(feature = "recursor", feature = "resolver"))]
 const MAX_RESOLVER_CACHE_ENTRIES: u64 = 1 << 24;
 
+#[cfg(unix)]
+pub(crate) const MAX_UDP_SOCKETS: usize = 256;
+
 impl Config {
     /// read a Config file from the file specified at path.
     pub(crate) fn read_config(path: &Path) -> Result<Self, ConfigError> {
@@ -278,6 +281,8 @@ impl Config {
         config.check_open_recursor()?;
         #[cfg(any(feature = "recursor", feature = "resolver"))]
         config.check_cache_caps()?;
+        #[cfg(unix)]
+        config.check_udp_socket_caps()?;
         Ok(config)
     }
 
@@ -285,13 +290,17 @@ impl Config {
     /// every other relative path in the config. Absolute paths are allowed
     /// (operators legitimately point `directory` at `/var/named` or similar).
     fn check_directory_traversal(&self) -> Result<(), ConfigError> {
-        if self
-            .directory
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-        {
+        Self::check_directory_path(&self.directory, "directory")
+    }
+
+    pub(crate) fn check_directory_path(
+        path: &Path,
+        field: &'static str,
+    ) -> Result<(), ConfigError> {
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
             return Err(ConfigError::DirectoryTraversal {
-                path: self.directory.display().to_string(),
+                field,
+                path: path.display().to_string(),
             });
         }
         Ok(())
@@ -300,6 +309,19 @@ impl Config {
     /// Read a [`Config`] from the given TOML string.
     fn from_toml(toml: &str) -> Result<Self, ConfigError> {
         Ok(toml::from_str(toml)?)
+    }
+
+    #[cfg(unix)]
+    fn check_udp_socket_caps(&self) -> Result<(), ConfigError> {
+        if let Some(sockets) = self.udp_socket.sockets {
+            if sockets > MAX_UDP_SOCKETS {
+                return Err(ConfigError::UdpSocketCountTooLarge {
+                    value: sockets,
+                    max: MAX_UDP_SOCKETS,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Reject configurations that would expose a recursive or forwarding
@@ -501,8 +523,13 @@ impl ZoneConfig {
                                 .await?;
 
                             #[cfg(feature = "__dnssec")]
-                            dnssec::load_keys(&mut handler, &zone_name, &server_config.keys)
-                                .await?;
+                            dnssec::load_keys(
+                                &mut handler,
+                                &zone_name,
+                                zone_dir,
+                                &server_config.keys,
+                            )
+                            .await?;
                             Arc::new(handler)
                         }
 
@@ -519,8 +546,13 @@ impl ZoneConfig {
                             )?;
 
                             #[cfg(feature = "__dnssec")]
-                            dnssec::load_keys(&mut handler, &zone_name, &server_config.keys)
-                                .await?;
+                            dnssec::load_keys(
+                                &mut handler,
+                                &zone_name,
+                                zone_dir,
+                                &server_config.keys,
+                            )
+                            .await?;
                             Arc::new(handler)
                         }
                         _ => return Err(ProtoError::from(EMPTY_STORES)),
@@ -874,10 +906,7 @@ fn is_resolver_store(store: &ExternalStoreConfig) -> bool {
 /// config that escaped its intended sandbox.
 #[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
 fn reject_parent_dir_components(path: &Path, field: &str) -> Result<(), String> {
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(format!(
             "{field} must not contain `..` components: {}",
             path.display()
@@ -924,12 +953,20 @@ pub(crate) enum ConfigError {
         max: u64,
     },
 
-    /// The configured `directory` field contains `..` components.
+    /// The configured directory field contains `..` components.
     #[error(
-        "`directory` must not contain `..` components: {path}; use an absolute path if the zone \
+        "`{field}` must not contain `..` components: {path}; use an absolute path if the zone \
          directory is outside the working directory"
     )]
-    DirectoryTraversal { path: String },
+    DirectoryTraversal { field: &'static str, path: String },
+
+    /// The configured UDP socket count is larger than the supported safety cap.
+    #[cfg(unix)]
+    #[error(
+        "`udp_socket.sockets` = {value} exceeds the maximum of {max}; values above this can \
+         exhaust file descriptors without improving UDP load distribution"
+    )]
+    UdpSocketCountTooLarge { value: usize, max: usize },
 }
 
 fn parse_request_timeout<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
